@@ -251,11 +251,11 @@ class ObstacleAvoidanceAgent(Node):
         self.collision_count = 0
         self.goal_reached_count = 0
         
-        # QoS for sensor data
+        # QoS for sensor data - must match Gazebo bridge (RELIABLE)
         sensor_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1
+            depth=10
         )
         
         # Subscribers

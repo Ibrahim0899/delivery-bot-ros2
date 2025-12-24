@@ -109,8 +109,8 @@ def generate_launch_description():
             '/tf@tf2_msgs/msg/TFMessage@gz.msgs.Pose_V',
             # Joint states (Gazebo -> ROS)
             '/joint_states@sensor_msgs/msg/JointState@gz.msgs.Model',
-            # Clock (Gazebo -> ROS)
-            '/clock@rosgraph_msgs/msg/Clock@gz.msgs.Clock',
+            # Clock (Gazebo -> ROS) - Must use world-specific topic
+            '/world/delivery_zone/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
             # Camera (Gazebo -> ROS)
             '/camera@sensor_msgs/msg/Image@gz.msgs.Image',
             '/camera_info@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo',
@@ -118,6 +118,7 @@ def generate_launch_description():
         remappings=[
             ('/cmd_vel', '/cmd_vel'),
             ('/odom', '/odom'),
+            ('/world/delivery_zone/clock', '/clock'),
         ]
     )
     
