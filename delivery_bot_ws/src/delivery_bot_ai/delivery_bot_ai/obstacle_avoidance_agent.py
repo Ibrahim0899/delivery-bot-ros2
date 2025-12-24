@@ -26,7 +26,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Float32, Bool
+from std_msgs.msg import Float32, Bool, String
 
 
 class QLearningAgent:
@@ -286,6 +286,14 @@ class ObstacleAvoidanceAgent(Node):
             10
         )
         
+        # Subscribe to save_model signal from training manager
+        self.save_model_sub = self.create_subscription(
+            String,
+            '/training/save_model',
+            self.save_model_callback,
+            10
+        )
+        
         # Control timer
         self.timer = self.create_timer(1.0 / control_rate, self.control_loop)
         
@@ -336,6 +344,18 @@ class ObstacleAvoidanceAgent(Node):
             f'Episode ended: {"SUCCESS" if success else "FAILED"} | '
             f'Reward: {self.episode_reward:.2f}'
         )
+    
+    def save_model_callback(self, msg: String):
+        """Save Q-table to specified path when signaled by training manager."""
+        save_path = msg.data
+        if save_path and self.training_mode:
+            try:
+                self.agent.save(save_path)
+                self.get_logger().info(
+                    f'💾 Q-table saved: {save_path} ({len(self.agent.q_table)} states)'
+                )
+            except Exception as e:
+                self.get_logger().error(f'Failed to save Q-table: {e}')
         
     def calculate_reward(self) -> float:
         """

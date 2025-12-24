@@ -10,12 +10,21 @@ import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from std_srvs.srv import Trigger
-from std_msgs.msg import Float32, Int32, Bool
+from std_msgs.msg import Float32, Int32, Bool, String
 from nav_msgs.msg import Odometry
 import json
 import os
 from datetime import datetime
 import math
+
+# Try to import matplotlib for plotting
+try:
+    import matplotlib
+    matplotlib.use('Agg')  # Non-interactive backend
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
 
 
 class TrainingManager(Node):
@@ -30,6 +39,7 @@ class TrainingManager(Node):
     Publishes:
         /training/episode_number - Current episode number
         /training/reset_signal - Signal to reset navigation
+        /training/save_model - Signal to save Q-table
         
     Services:
         Calls /reset_robot to reset simulation
@@ -70,12 +80,17 @@ class TrainingManager(Node):
         self.training_active = False
         self.current_position = (0.0, 0.0)
         
+        # Best model tracking
+        self.best_success_rate = 0.0
+        self.best_models = []  # List of (success_rate, timestamp, episode)
+        
         # Create log directory
         os.makedirs(self.log_dir, exist_ok=True)
         
         # Publishers
         self.episode_pub = self.create_publisher(Int32, '/training/episode_number', 10)
         self.reset_signal_pub = self.create_publisher(Bool, '/training/reset_signal', 10)
+        self.save_model_pub = self.create_publisher(String, '/training/save_model', 10)
         
         # Subscribers
         self.reward_sub = self.create_subscription(
@@ -221,6 +236,27 @@ class TrainingManager(Node):
             f'Rate={success_rate:.2%}'
         )
         
+        # Signal agent to save Q-table every episode
+        save_msg = String()
+        save_msg.data = f'{self.log_dir}/qtable_ep{self.current_episode}.pkl'
+        self.save_model_pub.publish(save_msg)
+        
+        # Check if this is a new best model (after 10+ episodes)
+        if len(recent_successes) >= 10 and success_rate > self.best_success_rate:
+            self.best_success_rate = success_rate
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            self.best_models.append((success_rate, timestamp, self.current_episode))
+            
+            # Keep only top 3 models
+            self.best_models.sort(key=lambda x: x[0], reverse=True)
+            self.best_models = self.best_models[:3]
+            
+            # Signal to save best model
+            best_msg = String()
+            best_msg.data = f'{self.log_dir}/best_qtable_{timestamp}_ep{self.current_episode}.pkl'
+            self.save_model_pub.publish(best_msg)
+            self.get_logger().info(f'🏆 New best model! Rate: {success_rate:.2%}')
+        
         # Check termination conditions
         if self.current_episode >= self.num_episodes:
             self.finish_training('Max episodes reached')
@@ -246,6 +282,7 @@ class TrainingManager(Node):
             'total_successes': total_successes,
             'success_rate': final_success_rate,
             'avg_reward': avg_reward,
+            'best_models': [(m[0], m[1], m[2]) for m in self.best_models],
             'episode_rewards': self.episode_rewards,
             'episode_successes': self.episode_successes,
             'episode_steps': self.episode_steps
@@ -258,13 +295,96 @@ class TrainingManager(Node):
         with open(log_file, 'w') as f:
             json.dump(log_data, f, indent=2)
         
+        # Generate plots
+        self.plot_metrics()
+        
+        # Signal final save
+        final_save = String()
+        final_save.data = f'{self.log_dir}/final_qtable.pkl'
+        self.save_model_pub.publish(final_save)
+        
         self.get_logger().info('=' * 50)
         self.get_logger().info(f'TRAINING COMPLETE: {reason}')
         self.get_logger().info(f'Episodes: {self.current_episode}')
         self.get_logger().info(f'Success Rate: {final_success_rate:.2%}')
         self.get_logger().info(f'Avg Reward: {avg_reward:.2f}')
+        self.get_logger().info(f'Best Models: {len(self.best_models)}')
         self.get_logger().info(f'Log saved: {log_file}')
         self.get_logger().info('=' * 50)
+    
+    def plot_metrics(self):
+        """Generate and save training metrics plots."""
+        if not MATPLOTLIB_AVAILABLE:
+            self.get_logger().warn('matplotlib not available, skipping plots')
+            return
+        
+        if len(self.episode_rewards) < 2:
+            return
+            
+        try:
+            fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+            fig.suptitle('Training Metrics', fontsize=14, fontweight='bold')
+            
+            episodes = list(range(1, len(self.episode_rewards) + 1))
+            
+            # Plot 1: Rewards per episode
+            ax1 = axes[0, 0]
+            ax1.plot(episodes, self.episode_rewards, 'b-', alpha=0.5, label='Reward')
+            # Moving average
+            window = min(20, len(self.episode_rewards))
+            if window > 1:
+                ma = [sum(self.episode_rewards[max(0,i-window):i])/min(i,window) 
+                      for i in range(1, len(self.episode_rewards)+1)]
+                ax1.plot(episodes, ma, 'r-', linewidth=2, label=f'MA({window})')
+            ax1.set_xlabel('Episode')
+            ax1.set_ylabel('Reward')
+            ax1.set_title('Episode Rewards')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            
+            # Plot 2: Cumulative success rate
+            ax2 = axes[0, 1]
+            cumsum = [sum(self.episode_successes[:i+1])/(i+1) * 100 
+                      for i in range(len(self.episode_successes))]
+            ax2.plot(episodes, cumsum, 'g-', linewidth=2)
+            ax2.axhline(y=self.success_threshold * 100, color='r', linestyle='--', 
+                       label=f'Target ({self.success_threshold:.0%})')
+            ax2.set_xlabel('Episode')
+            ax2.set_ylabel('Success Rate (%)')
+            ax2.set_title('Cumulative Success Rate')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+            ax2.set_ylim(0, 100)
+            
+            # Plot 3: Steps per episode
+            ax3 = axes[1, 0]
+            ax3.plot(episodes, self.episode_steps, 'm-', alpha=0.7)
+            ax3.axhline(y=self.max_steps, color='r', linestyle='--', label='Max steps')
+            ax3.set_xlabel('Episode')
+            ax3.set_ylabel('Steps')
+            ax3.set_title('Steps per Episode')
+            ax3.legend()
+            ax3.grid(True, alpha=0.3)
+            
+            # Plot 4: Success/Fail distribution
+            ax4 = axes[1, 1]
+            success_count = sum(self.episode_successes)
+            fail_count = len(self.episode_successes) - success_count
+            ax4.bar(['Success', 'Fail'], [success_count, fail_count], 
+                   color=['green', 'red'], alpha=0.7)
+            ax4.set_ylabel('Count')
+            ax4.set_title(f'Results: {success_count}/{len(self.episode_successes)} Success')
+            
+            plt.tight_layout()
+            
+            plot_file = os.path.join(self.log_dir, 'training_metrics.png')
+            plt.savefig(plot_file, dpi=150, bbox_inches='tight')
+            plt.close()
+            
+            self.get_logger().info(f'📊 Metrics plot saved: {plot_file}')
+            
+        except Exception as e:
+            self.get_logger().error(f'Failed to generate plots: {e}')
 
 
 def main(args=None):
