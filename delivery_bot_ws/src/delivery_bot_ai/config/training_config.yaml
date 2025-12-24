@@ -1,0 +1,27 @@
+# Training Configuration for DeliveryBot Q-Learning Navigation
+
+training:
+  num_episodes: 500
+  max_steps_per_episode: 1000
+  success_threshold: 0.8  # Stop when 80% success rate reached
+  log_dir: '/tmp/delivery_bot_training'
+
+qlearning:
+  learning_rate: 0.1
+  discount_factor: 0.95
+  epsilon_start: 0.5
+  epsilon_end: 0.05
+  epsilon_decay: 0.995
+
+navigation:
+  start_x: 0.0
+  start_y: 0.0
+  goal_x: 5.0
+  goal_y: 5.0
+  goal_tolerance: 0.5
+  control_rate: 10.0
+
+simulation:
+  world_name: 'delivery_zone'
+  robot_name: 'delivery_bot'
+  use_sim_time: true

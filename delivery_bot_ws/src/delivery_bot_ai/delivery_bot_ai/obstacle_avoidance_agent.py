@@ -26,6 +26,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
+from std_msgs.msg import Float32, Bool
 
 
 class QLearningAgent:
@@ -272,8 +273,18 @@ class ObstacleAvoidanceAgent(Node):
             10
         )
         
-        # Publisher
+        # Publishers
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.reward_pub = self.create_publisher(Float32, '/training/episode_reward', 10)
+        self.done_pub = self.create_publisher(Bool, '/training/episode_done', 10)
+        
+        # Subscribe to reset signal from training manager
+        self.reset_sub = self.create_subscription(
+            Bool,
+            '/training/reset_signal',
+            self.reset_callback,
+            10
+        )
         
         # Control timer
         self.timer = self.create_timer(1.0 / control_rate, self.control_loop)
@@ -300,6 +311,31 @@ class ObstacleAvoidanceAgent(Node):
         siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         self.current_yaw = math.atan2(siny_cosp, cosy_cosp)
+    
+    def reset_callback(self, msg: Bool):
+        """Handle reset signal from training manager."""
+        if msg.data:
+            self.get_logger().info('Resetting episode state...')
+            # Reset episode state
+            self.previous_state = None
+            self.previous_action = None
+            self.previous_distance = None
+            self.episode_reward = 0.0
+            self.step_count = 0
+            # Decay epsilon at end of episode
+            if self.training_mode:
+                self.agent.decay_epsilon()
+    
+    def signal_episode_done(self, success: bool):
+        """Signal episode completion to training manager."""
+        done_msg = Bool()
+        done_msg.data = True
+        self.done_pub.publish(done_msg)
+        
+        self.get_logger().info(
+            f'Episode ended: {"SUCCESS" if success else "FAILED"} | '
+            f'Reward: {self.episode_reward:.2f}'
+        )
         
     def calculate_reward(self) -> float:
         """
@@ -324,6 +360,7 @@ class ObstacleAvoidanceAgent(Node):
         if distance_to_goal < self.goal_tolerance:
             self.get_logger().info('🎉 GOAL REACHED!')
             self.goal_reached_count += 1
+            self.signal_episode_done(success=True)
             return 100.0
         
         # Check for collision (any obstacle too close)
@@ -335,6 +372,7 @@ class ObstacleAvoidanceAgent(Node):
                 if min_distance < 0.25:
                     self.get_logger().warn('⚠️ COLLISION DETECTED!')
                     self.collision_count += 1
+                    self.signal_episode_done(success=False)
                     return -50.0
                 # Penalty for being close to obstacles
                 if min_distance < 0.5:
@@ -349,6 +387,11 @@ class ObstacleAvoidanceAgent(Node):
         
         # Small time penalty to encourage efficiency
         reward -= 0.1
+        
+        # Publish step reward for training manager
+        reward_msg = Float32()
+        reward_msg.data = reward
+        self.reward_pub.publish(reward_msg)
         
         return reward
     

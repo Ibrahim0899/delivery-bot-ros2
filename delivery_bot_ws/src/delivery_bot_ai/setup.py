@@ -15,6 +15,9 @@ setup(
         # Include launch files
         (os.path.join('share', package_name, 'launch'), 
             glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
+        # Include config files
+        (os.path.join('share', package_name, 'config'), 
+            glob(os.path.join('config', '*.yaml'))),
     ],
     install_requires=['setuptools', 'numpy'],
     zip_safe=True,
@@ -26,6 +29,8 @@ setup(
     entry_points={
         'console_scripts': [
             'obstacle_avoidance_agent = delivery_bot_ai.obstacle_avoidance_agent:main',
+            'reset_service = delivery_bot_ai.reset_service:main',
+            'training_manager = delivery_bot_ai.training_manager:main',
         ],
     },
 )
